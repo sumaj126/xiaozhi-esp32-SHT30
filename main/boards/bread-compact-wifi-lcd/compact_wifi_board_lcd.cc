@@ -150,6 +150,9 @@ private:
         if (sht30_sensor_->IsInitialized()) {
             ESP_LOGI(TAG, "SHT30 sensor initialized");
 
+            // 温度校准：显示值比实际高1度，设置偏移-1度
+            sht30_sensor_->SetTemperatureOffset(-1.0f);
+
             // 注册 MCP 工具
             auto& mcp_server = McpServer::GetInstance();
             mcp_server.AddTool("sensor.read_temperature_humidity",

@@ -30,9 +30,8 @@ StandbyScreen::StandbyScreen(int width, int height)
     , current_temperature_(NAN)
     , current_humidity_(NAN) {
 
-    // 设置时区 (UTC+8)
-    setenv("TZ", "CST-8", 1);
-    tzset();
+    // 不设置时区
+    // 我们会在显示时手动调整时间
 
     // 创建定时器
     esp_timer_create_args_t timer_args = {
@@ -296,7 +295,18 @@ void StandbyScreen::UpdateTimerCallback() {
     time_t now;
     struct tm timeinfo;
     time(&now);
-    localtime_r(&now, &timeinfo);
+    // 使用gmtime_r获取UTC时间
+    gmtime_r(&now, &timeinfo);
+    // 手动加8小时转换为东八区时间
+    timeinfo.tm_hour += 8;
+    // 处理跨日情况
+    while (timeinfo.tm_hour >= 24) {
+        timeinfo.tm_hour -= 24;
+        timeinfo.tm_mday++;
+    }
+    // 重新计算星期
+    time_t adjusted = mktime(&timeinfo);
+    gmtime_r(&adjusted, &timeinfo);
 
     // 格式化日期
     char date_buf[32];
