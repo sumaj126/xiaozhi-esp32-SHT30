@@ -240,6 +240,25 @@ void StandbyScreen::UpdateTemperatureHumidityUI() {
         ESP_LOGW("StandbyScreen", "Temperature is NaN, displaying placeholder");
     } else {
         snprintf(temp_buf, sizeof(temp_buf), "%.1f°C", current_temperature_);
+
+        // 根据温度设置颜色
+        lv_color_t temp_color;
+        if (current_temperature_ < 20.0f) {
+            // 20度以下：蓝色
+            temp_color = lv_color_hex(0x2196F3);
+        } else if (current_temperature_ >= 20.0f && current_temperature_ <= 30.0f) {
+            // 20-30度：浅黄色到深橙色渐变
+            // 浅黄色(0xFFEB3B) -> 深橙色(0xFF5722)
+            float ratio = (current_temperature_ - 20.0f) / 10.0f; // 0.0 ~ 1.0
+            uint8_t r = 0xFF; // 红色保持255
+            uint8_t g = 0xEB + (0x57 - 0xEB) * ratio; // 235 -> 87
+            uint8_t b = 0x3B + (0x22 - 0x3B) * ratio; // 59 -> 34
+            temp_color = lv_color_make(r, g, b);
+        } else {
+            // 30度以上：红色
+            temp_color = lv_color_hex(0xF44336);
+        }
+        lv_obj_set_style_text_color(temperature_label_, temp_color, 0);
     }
 
     if (std::isnan(current_humidity_)) {
@@ -251,6 +270,11 @@ void StandbyScreen::UpdateTemperatureHumidityUI() {
 
     ESP_LOGI("StandbyScreen", "Updating temperature/humidity UI: %s %s", temp_buf, humi_buf);
     lv_label_set_text(temperature_label_, temp_buf);
+
+    // 湿度始终用绿色显示
+    if (!std::isnan(current_humidity_)) {
+        lv_obj_set_style_text_color(humidity_label_, lv_color_hex(0x4CAF50), 0);
+    }
     lv_label_set_text(humidity_label_, humi_buf);
 }
 
