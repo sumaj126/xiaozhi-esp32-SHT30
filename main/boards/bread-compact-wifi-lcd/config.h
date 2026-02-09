@@ -284,7 +284,7 @@
 
 
 // A MCP Test: Control a lamp
-// Note: GPIO 17 and 18 are used for DHT20 I2C (SDA/SCL)
+// Note: GPIO 17 and 18 are used for SHT30 UART (TX/RX)
 // Using GPIO 39 for lamp to avoid conflict
 #define LAMP_GPIO GPIO_NUM_39
 

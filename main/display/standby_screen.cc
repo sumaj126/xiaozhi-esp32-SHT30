@@ -10,8 +10,8 @@
 
 #define TAG "StandbyScreen"
 
-// 字体声明
-LV_FONT_DECLARE(BUILTIN_TEXT_FONT);
+LV_FONT_DECLARE(font_puhui_20_4);
+LV_FONT_DECLARE(font_awesome_20_4);
 
 StandbyScreen::StandbyScreen(int width, int height)
     : width_(width)
@@ -61,15 +61,12 @@ void StandbyScreen::CreateUI() {
         return;
     }
 
-    auto& theme_manager = LvglThemeManager::GetInstance();
-    auto* theme = theme_manager.GetTheme("light");
-    auto lvgl_theme = static_cast<LvglTheme*>(theme);
-    auto text_font = lvgl_theme->text_font()->font();
-    auto icon_font = lvgl_theme->icon_font()->font();
+    auto text_font = &font_puhui_20_4;
+    auto icon_font = &font_awesome_20_4;
 
     auto screen = lv_screen_active();
 
-    // 主容器 - 使用flex布局垂直排列三行
+    // 主容器 - 全屏背景
     container_ = lv_obj_create(screen);
     lv_obj_set_size(container_, width_, height_);
     lv_obj_set_style_radius(container_, 0, 0);
@@ -79,99 +76,65 @@ void StandbyScreen::CreateUI() {
     lv_obj_set_style_pad_all(container_, 0, 0);
     lv_obj_set_scrollbar_mode(container_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_center(container_);
-    lv_obj_set_flex_flow(container_, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(container_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    // 第一行：日期和星期
-    lv_obj_t* row1 = lv_obj_create(container_);
-    lv_obj_set_size(row1, width_, height_ / 3);
-    lv_obj_set_style_bg_opa(row1, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(row1, 0, 0);
-    lv_obj_set_style_pad_all(row1, 8, 0);
-    lv_obj_set_flex_flow(row1, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row1, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    date_label_ = lv_label_create(row1);
+    // 第一行：日期（顶部居中）
+    date_label_ = lv_label_create(container_);
     lv_label_set_text(date_label_, "");
     lv_obj_set_style_text_font(date_label_, text_font, 0);
     lv_obj_set_style_text_color(date_label_, lv_color_white(), 0);
+    lv_obj_set_style_text_align(date_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(date_label_, LV_ALIGN_TOP_MID, 0, 16);
 
-    weekday_label_ = lv_label_create(row1);
+    // 第二行：星期（日期下方居中）
+    weekday_label_ = lv_label_create(container_);
     lv_label_set_text(weekday_label_, "");
     lv_obj_set_style_text_font(weekday_label_, text_font, 0);
     lv_obj_set_style_text_color(weekday_label_, lv_color_white(), 0);
-    lv_obj_set_style_margin_left(weekday_label_, 16, 0);
+    lv_obj_set_style_text_align(weekday_label_, LV_TEXT_ALIGN_CENTER, 0);
+    // 使用顶部居中对齐，Y轴位置基于date_label的底部
+    lv_obj_align(weekday_label_, LV_ALIGN_TOP_MID, 0, 16 + 8 + text_font->line_height);
 
-    // 第二行：时钟
-    lv_obj_t* row2 = lv_obj_create(container_);
-    lv_obj_set_size(row2, width_, height_ / 3);
-    lv_obj_set_style_bg_opa(row2, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(row2, 0, 0);
-    lv_obj_set_style_pad_all(row2, 0, 0);
-    lv_obj_set_flex_flow(row2, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(row2, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    time_label_ = lv_label_create(row2);
+    // 第三行：时钟（屏幕中央偏左）
+    time_label_ = lv_label_create(container_);
     lv_label_set_text(time_label_, "--:--");
     lv_obj_set_style_text_font(time_label_, text_font, 0);
     lv_obj_set_style_text_color(time_label_, lv_color_white(), 0);
+    lv_obj_set_style_text_align(time_label_, LV_TEXT_ALIGN_CENTER, 0);
+    
+    // 放大字体
+    lv_obj_set_style_transform_scale(time_label_, 400, 0);
+    
+    // 定位到屏幕中央偏左
+    lv_obj_align(time_label_, LV_ALIGN_CENTER, -20, 0);
 
-    // 第三行：温湿度（左右分布）
-    lv_obj_t* row3 = lv_obj_create(container_);
-    lv_obj_set_size(row3, width_, height_ / 3);
-    lv_obj_set_style_bg_opa(row3, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(row3, 0, 0);
-    lv_obj_set_style_pad_all(row3, 8, 0);
-    lv_obj_set_flex_flow(row3, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row3, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
+    // 第三行：温湿度（底部左右）
     // 左边：温度
-    lv_obj_t* temp_container = lv_obj_create(row3);
-    lv_obj_set_size(temp_container, width_ / 2 - 8, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(temp_container, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(temp_container, 0, 0);
-    lv_obj_set_style_pad_all(temp_container, 0, 0);
-    lv_obj_set_flex_flow(temp_container, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(temp_container, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    temp_icon_ = lv_label_create(temp_container);
+    temp_icon_ = lv_label_create(container_);
     lv_label_set_text(temp_icon_, LV_SYMBOL_IMAGE "°C");
     lv_obj_set_style_text_font(temp_icon_, icon_font, 0);
     lv_obj_set_style_text_color(temp_icon_, lv_color_hex(0xFF5722), 0);
+    lv_obj_align(temp_icon_, LV_ALIGN_BOTTOM_LEFT, 16, -16);
 
-    temperature_label_ = lv_label_create(temp_container);
+    temperature_label_ = lv_label_create(container_);
     lv_label_set_text(temperature_label_, "--.-°C");
     lv_obj_set_style_text_font(temperature_label_, text_font, 0);
     lv_obj_set_style_text_color(temperature_label_, lv_color_white(), 0);
-    lv_obj_set_style_margin_left(temperature_label_, 8, 0);
+    lv_obj_align_to(temperature_label_, temp_icon_, LV_ALIGN_OUT_RIGHT_MID, 8, 0);
 
     // 右边：湿度
-    lv_obj_t* humidity_container = lv_obj_create(row3);
-    lv_obj_set_size(humidity_container, width_ / 2 - 8, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(humidity_container, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(humidity_container, 0, 0);
-    lv_obj_set_style_pad_all(humidity_container, 0, 0);
-    lv_obj_set_flex_flow(humidity_container, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(humidity_container, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    humidity_icon_ = lv_label_create(humidity_container);
+    humidity_icon_ = lv_label_create(container_);
     lv_label_set_text(humidity_icon_, LV_SYMBOL_SETTINGS "%");
     lv_obj_set_style_text_font(humidity_icon_, icon_font, 0);
     lv_obj_set_style_text_color(humidity_icon_, lv_color_hex(0x2196F3), 0);
+    lv_obj_align(humidity_icon_, LV_ALIGN_BOTTOM_RIGHT, -16, -16);
 
-    humidity_label_ = lv_label_create(humidity_container);
+    humidity_label_ = lv_label_create(container_);
     lv_label_set_text(humidity_label_, "--.-%");
     lv_obj_set_style_text_font(humidity_label_, text_font, 0);
     lv_obj_set_style_text_color(humidity_label_, lv_color_white(), 0);
-    lv_obj_set_style_margin_left(humidity_label_, 8, 0);
+    lv_obj_align_to(humidity_label_, humidity_icon_, LV_ALIGN_OUT_LEFT_MID, -8, 0);
 
-    // 分割线
-    divider_line_ = lv_obj_create(container_);
-    lv_obj_set_size(divider_line_, width_ - 32, 1);
-    lv_obj_align(divider_line_, LV_ALIGN_TOP_MID, 0, 2 * height_ / 3);
-    lv_obj_set_style_bg_color(divider_line_, lv_color_hex(0x333333), 0);
-    lv_obj_set_style_bg_opa(divider_line_, LV_OPA_50, 0);
-    lv_obj_set_style_pad_all(divider_line_, 0, 0);
+
 }
 
 void StandbyScreen::DestroyUI() {
@@ -197,6 +160,11 @@ void StandbyScreen::Show() {
 
     ESP_LOGI("StandbyScreen", "Show() called, creating UI...");
     CreateUI();
+    // 淡入动画，让待机界面出现更柔和
+    if (container_) {
+        lv_obj_set_style_opa(container_, LV_OPA_TRANSP, 0);
+        lv_obj_fade_in(container_, 300, 0);
+    }
     is_visible_ = true;
 
     // 启动定时更新（每秒更新时间）

@@ -8,11 +8,11 @@
 #include "mcp_server.h"
 #include "lamp_controller.h"
 #include "led/single_led.h"
-#include "dht20_sensor.h"
+#include "sht30_sensor.h"
 #include "device_state.h"
 
 #include <esp_log.h>
-#include <driver/i2c_master.h>
+#include <driver/uart.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
@@ -67,8 +67,7 @@ private:
 
     Button boot_button_;
     LcdDisplay* display_;
-    DHT20Sensor* dht20_sensor_;
-    i2c_master_bus_handle_t display_i2c_bus_;
+    SHT30Sensor* sht30_sensor_;
 
     // 上一次的设备状态，用于检测状态变化
     DeviceState last_device_state_;
@@ -130,31 +129,6 @@ private:
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
-    void InitializeDisplayI2c() {
-        // 初始化 DHT20 使用的 I2C 总线（ESP-IDF 5.5+）
-        // 使用 GPIO 17 (SDA) 和 GPIO 18 (SCL) 作为 DHT20 的 I2C 引脚
-        i2c_master_bus_config_t bus_config = {
-            .i2c_port = I2C_NUM_0,
-            .sda_io_num = GPIO_NUM_17,  // SDA
-            .scl_io_num = GPIO_NUM_18,  // SCL
-            .clk_source = I2C_CLK_SRC_DEFAULT,
-            .glitch_ignore_cnt = 7,
-            .intr_priority = 0,
-            .trans_queue_depth = 0,
-            .flags = {
-                .enable_internal_pullup = true,
-            },
-        };
-
-        esp_err_t ret = i2c_new_master_bus(&bus_config, &display_i2c_bus_);
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "I2C bus initialization failed: %s (DHT20 will not work)", esp_err_to_name(ret));
-            display_i2c_bus_ = nullptr;
-        } else {
-            ESP_LOGI(TAG, "I2C bus initialized for DHT20 (SDA:GPIO%d, SCL:GPIO%d)", GPIO_NUM_17, GPIO_NUM_18);
-        }
-    }
-
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
@@ -170,33 +144,24 @@ private:
     void InitializeTools() {
         static LampController lamp(LAMP_GPIO);
 
-        // 初始化 DHT20 传感器（仅当 I2C 总线可用时）
-        if (display_i2c_bus_ != nullptr) {
-            dht20_sensor_ = new DHT20Sensor(display_i2c_bus_, 0x38);
+        // 初始化 SHT30 传感器 (UART_NUM_2, TX:GPIO17, RX:GPIO18, 9600 baud)
+        sht30_sensor_ = new SHT30Sensor(UART_NUM_2, 17, 18, 9600);
 
-            if (dht20_sensor_->IsInitialized()) {
-                ESP_LOGI(TAG, "DHT20 sensor initialized");
+        if (sht30_sensor_->IsInitialized()) {
+            ESP_LOGI(TAG, "SHT30 sensor initialized");
 
-                // 校准传感器：温度显示比实际值高1度，需要减少1度偏移
-                // 如果实际温度是25度，传感器显示26度，则偏移量应为-1
-                dht20_sensor_->SetTemperatureOffset(-1.0f);  // 温度减少1度
-                ESP_LOGI(TAG, "DHT20 sensor calibrated: temperature offset -1.0°C");
-
-                // 注册 MCP 工具
-                auto& mcp_server = McpServer::GetInstance();
-                mcp_server.AddTool("sensor.read_temperature_humidity",
-                    "读取当前环境的温度和湿度数据",
-                    PropertyList(),
-                    [this](const PropertyList& properties) -> ReturnValue {
-                        std::string data = dht20_sensor_->GetJsonData();
-                        cJSON* result = cJSON_Parse(data.c_str());
-                        return result;
-                    });
-            } else {
-                ESP_LOGW(TAG, "DHT20 sensor initialization failed");
-            }
+            // 注册 MCP 工具
+            auto& mcp_server = McpServer::GetInstance();
+            mcp_server.AddTool("sensor.read_temperature_humidity",
+                "读取当前环境的温度和湿度数据",
+                PropertyList(),
+                [this](const PropertyList& properties) -> ReturnValue {
+                    std::string data = sht30_sensor_->GetJsonData();
+                    cJSON* result = cJSON_Parse(data.c_str());
+                    return result;
+                });
         } else {
-            ESP_LOGW(TAG, "I2C bus not available, skipping DHT20 sensor");
+            ESP_LOGW(TAG, "SHT30 sensor initialization failed");
         }
 
         // 启动设备状态监控定时器
@@ -238,14 +203,21 @@ private:
                     }
                     break;
 
+                case kDeviceStateWifiConfiguring:
                 case kDeviceStateConnecting:
                 case kDeviceStateActivating:
-                case kDeviceStateStarting:
-                case kDeviceStateWifiConfiguring:
                 case kDeviceStateUpgrading:
                 case kDeviceStateAudioTesting:
+                    // 配置或连接状态，隐藏待机界面显示主界面（状态栏、通知等）
+                    if (display_) {
+                        ESP_LOGI(TAG, "Configuring/Connecting state - hiding standby screen");
+                        display_->HideStandbyScreen();
+                    }
+                    break;
+
+                case kDeviceStateStarting:
                 case kDeviceStateFatalError:
-                    // 这些状态下保持原有界面不变（可能是待机或对话界面）
+                    // 启动或错误状态，保持原有界面不变（可能是待机或对话界面）
                     // 不进行界面切换，避免界面闪烁
                     ESP_LOGI(TAG, "State %d - keeping current UI", current_state);
                     break;
@@ -264,19 +236,19 @@ private:
 
         // 更新温湿度数据（在待机模式下）
         if (display_) {
-            if (dht20_sensor_ && dht20_sensor_->IsInitialized()) {
+            if (sht30_sensor_ && sht30_sensor_->IsInitialized()) {
                 float temp, humi;
-                if (dht20_sensor_->ReadData(&temp, &humi)) {
-                    ESP_LOGI(TAG, "DHT20 read successful: temp=%.1f°C, humi=%.1f%%", temp, humi);
+                if (sht30_sensor_->ReadData(&temp, &humi)) {
+                    ESP_LOGI(TAG, "SHT30 read successful: temp=%.1f°C, humi=%.1f%%", temp, humi);
                     display_->UpdateStandbyTemperatureHumidity(temp, humi);
                 } else {
-                    ESP_LOGW(TAG, "Failed to read DHT20 data");
+                    ESP_LOGW(TAG, "Failed to read SHT30 data");
                     display_->UpdateStandbyTemperatureHumidity(NAN, NAN);
                 }
             } else {
-                // DHT20未初始化，显示占位符
-                ESP_LOGW(TAG, "DHT20 not available (sensor=%p), showing placeholder",
-                         (void*)dht20_sensor_);
+                // SHT30未初始化，显示占位符
+                ESP_LOGW(TAG, "SHT30 not available (sensor=%p), showing placeholder",
+                         (void*)sht30_sensor_);
                 display_->UpdateStandbyTemperatureHumidity(NAN, NAN);
             }
         }
@@ -303,11 +275,10 @@ public:
     CompactWifiBoardLCD() :
         boot_button_(BOOT_BUTTON_GPIO),
         display_(nullptr),
-        dht20_sensor_(nullptr),
+        sht30_sensor_(nullptr),
         last_device_state_(kDeviceStateUnknown) {
         InitializeSpi();
         InitializeLcdDisplay();
-        InitializeDisplayI2c();
         InitializeButtons();
         InitializeTools();
         if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {
@@ -322,11 +293,8 @@ public:
     }
 
     ~CompactWifiBoardLCD() {
-        if (dht20_sensor_) {
-            delete dht20_sensor_;
-        }
-        if (display_i2c_bus_) {
-            i2c_del_master_bus(display_i2c_bus_);
+        if (sht30_sensor_) {
+            delete sht30_sensor_;
         }
     }
 
