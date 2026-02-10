@@ -146,7 +146,6 @@ public:
         buffer[len] = '\0';
 
         // 查找包含完整数据格式的行
-        char* data_line = buffer;
         bool found = false;
 
         // 逐行检查，查找最后一个完整的数据行
@@ -166,7 +165,6 @@ public:
                     temperature_ = *temperature;
                     humidity_ = *humidity;
                     found = true;
-                    data_line = line_start;  // 记录最新的有效数据行
                 }
             }
 

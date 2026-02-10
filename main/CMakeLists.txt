@@ -36,6 +36,7 @@ set(SOURCES "audio/audio_codec.cc"
             "settings.cc"
             "device_state_machine.cc"
             "assets.cc"
+            "sensor_upload.cc"
             "main.cc"
             )
 
@@ -816,6 +817,7 @@ idf_component_register(SRCS ${SOURCES}
                         console
                         efuse
                         bt
+                        esp_http_client
                     )
 
 # Use target_compile_definitions to define BOARD_TYPE, BOARD_NAME

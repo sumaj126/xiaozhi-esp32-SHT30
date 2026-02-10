@@ -9,7 +9,9 @@
 #include "lamp_controller.h"
 #include "led/single_led.h"
 #include "sht30_sensor.h"
+#include "sensor_upload.h"
 #include "device_state.h"
+#include "settings.h"
 
 #include <esp_log.h>
 #include <driver/uart.h>
@@ -68,9 +70,13 @@ private:
     Button boot_button_;
     LcdDisplay* display_;
     SHT30Sensor* sht30_sensor_;
+    SensorDataUploader* sensor_uploader_;
 
     // 上一次的设备状态，用于检测状态变化
     DeviceState last_device_state_;
+
+    // 上次上传时间计数器
+    int upload_counter_;
 
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
@@ -159,16 +165,51 @@ private:
                 "读取当前环境的温度和湿度数据",
                 PropertyList(),
                 [this](const PropertyList& properties) -> ReturnValue {
-                    std::string data = sht30_sensor_->GetJsonData();
-                    cJSON* result = cJSON_Parse(data.c_str());
+                    cJSON* result = cJSON_CreateObject();
+                    if (result) {
+                        float temp = sht30_sensor_->GetTemperature();
+                        float hum = sht30_sensor_->GetHumidity();
+                        cJSON_AddNumberToObject(result, "temperature", temp);
+                        cJSON_AddNumberToObject(result, "humidity", hum);
+                        ESP_LOGI(TAG, "MCP sensor read: temp=%.1f, hum=%.1f", temp, hum);
+                    }
                     return result;
                 });
+
+            // 初始化温湿度数据上传器
+            InitializeSensorUploader();
         } else {
             ESP_LOGW(TAG, "SHT30 sensor initialization failed");
         }
 
         // 启动设备状态监控定时器
         StartDeviceStateMonitor();
+    }
+
+    // 初始化温湿度数据上传器
+    void InitializeSensorUploader() {
+        sensor_uploader_ = new SensorDataUploader();
+
+        // 硬编码上传参数
+        std::string upload_url = "http://175.178.158.54:7791/update";
+        std::string api_key = "";
+        std::string device_id = "pcroom-esp32";
+
+        sensor_uploader_->SetUploadUrl(upload_url);
+        sensor_uploader_->SetApiKey(api_key);
+        sensor_uploader_->SetDeviceId(device_id);
+
+        // 设置上传回调
+        sensor_uploader_->SetUploadCallback([this](bool success, const char* message) {
+            if (success) {
+                ESP_LOGI(TAG, "Sensor data uploaded: %s", message);
+            } else {
+                ESP_LOGW(TAG, "Sensor data upload failed: %s", message);
+            }
+        });
+
+        ESP_LOGI(TAG, "Sensor data uploader initialized, URL: %s, Device ID: %s",
+                 upload_url.c_str(), device_id.c_str());
     }
 
     // 设备状态监控定时器回调
@@ -244,6 +285,19 @@ private:
                 if (sht30_sensor_->ReadData(&temp, &humi)) {
                     ESP_LOGI(TAG, "SHT30 read successful: temp=%.1f°C, humi=%.1f%%", temp, humi);
                     display_->UpdateStandbyTemperatureHumidity(temp, humi);
+
+                    // 上传温湿度数据到云服务器（每60秒上传一次）
+                    upload_counter_++;
+                    if (upload_counter_ >= 60) { // 60秒
+                        ESP_LOGI(TAG, "Upload counter reached %d, attempting upload", upload_counter_);
+                        if (sensor_uploader_) {
+                            ESP_LOGI(TAG, "Calling UploadSensorData: temp=%.1f, humi=%.1f", temp, humi);
+                            sensor_uploader_->UploadSensorData(temp, humi, nullptr);
+                        } else {
+                            ESP_LOGW(TAG, "Sensor uploader not available (sensor_uploader_=%p)", (void*)sensor_uploader_);
+                        }
+                        upload_counter_ = 0;
+                    }
                 } else {
                     ESP_LOGW(TAG, "Failed to read SHT30 data");
                     display_->UpdateStandbyTemperatureHumidity(NAN, NAN);
@@ -279,7 +333,9 @@ public:
         boot_button_(BOOT_BUTTON_GPIO),
         display_(nullptr),
         sht30_sensor_(nullptr),
-        last_device_state_(kDeviceStateUnknown) {
+        sensor_uploader_(nullptr),
+        last_device_state_(kDeviceStateUnknown),
+        upload_counter_(0) {
         InitializeSpi();
         InitializeLcdDisplay();
         InitializeButtons();
@@ -298,6 +354,9 @@ public:
     ~CompactWifiBoardLCD() {
         if (sht30_sensor_) {
             delete sht30_sensor_;
+        }
+        if (sensor_uploader_) {
+            delete sensor_uploader_;
         }
     }
 
