@@ -236,26 +236,70 @@ private:
                         ESP_LOGI(TAG, "Idle state - showing standby screen");
                         display_->ShowStandbyScreen();
                     }
+                    // 上传待机状态
+                    if (sensor_uploader_ && sht30_sensor_ && sht30_sensor_->IsInitialized()) {
+                        float temp, humi;
+                        if (sht30_sensor_->ReadData(&temp, &humi)) {
+                            ESP_LOGI(TAG, "Uploading idle status: temp=%.1f, humi=%.1f", temp, humi);
+                            sensor_uploader_->UploadSensorData(temp, humi, 0, nullptr); // status=0: 待机
+                        }
+                    }
+                    break;
+
+                case kDeviceStateActivating:
+                    // 唤醒状态，显示待机界面
+                    if (display_) {
+                        ESP_LOGI(TAG, "Activating state - showing standby screen");
+                        display_->ShowStandbyScreen();
+                    }
+                    // 上传唤醒中状态
+                    if (sensor_uploader_ && sht30_sensor_ && sht30_sensor_->IsInitialized()) {
+                        float temp, humi;
+                        if (sht30_sensor_->ReadData(&temp, &humi)) {
+                            ESP_LOGI(TAG, "Uploading activating status: temp=%.1f, humi=%.1f", temp, humi);
+                            sensor_uploader_->UploadSensorData(temp, humi, 1, nullptr); // status=1: 唤醒中
+                        }
+                    }
                     break;
 
                 case kDeviceStateListening:
                 case kDeviceStateSpeaking:
                     // 对话中（录音或播放），隐藏待机界面显示对话内容
+                    // 重置上传计数器，暂停上传避免阻塞小智
                     if (display_) {
                         ESP_LOGI(TAG, "Listening/Speaking state - hiding standby screen");
                         display_->HideStandbyScreen();
+                    }
+                    upload_counter_ = 0; // 重置上传计数
+                    // 上传录音/播放状态
+                    if (sensor_uploader_ && sht30_sensor_ && sht30_sensor_->IsInitialized()) {
+                        float temp, humi;
+                        if (sht30_sensor_->ReadData(&temp, &humi)) {
+                            int status = (current_state == kDeviceStateListening) ? 2 : 3; // status=2: 录音中, status=3: 播放中
+                            ESP_LOGI(TAG, "Uploading %s status: temp=%.1f, humi=%.1f", (status == 2) ? "listening" : "speaking", temp, humi);
+                            sensor_uploader_->UploadSensorData(temp, humi, status, nullptr);
+                        }
                     }
                     break;
 
                 case kDeviceStateWifiConfiguring:
                 case kDeviceStateConnecting:
-                case kDeviceStateActivating:
                 case kDeviceStateUpgrading:
                 case kDeviceStateAudioTesting:
                     // 配置或连接状态，隐藏待机界面显示主界面（状态栏、通知等）
+                    // 重置上传计数器，暂停上传
                     if (display_) {
                         ESP_LOGI(TAG, "Configuring/Connecting state - hiding standby screen");
                         display_->HideStandbyScreen();
+                    }
+                    upload_counter_ = 0; // 重置上传计数
+                    // 上传配置中状态
+                    if (sensor_uploader_ && sht30_sensor_ && sht30_sensor_->IsInitialized()) {
+                        float temp, humi;
+                        if (sht30_sensor_->ReadData(&temp, &humi)) {
+                            ESP_LOGI(TAG, "Uploading configuring status: temp=%.1f, humi=%.1f", temp, humi);
+                            sensor_uploader_->UploadSensorData(temp, humi, 4, nullptr); // status=4: 配置中
+                        }
                     }
                     break;
 
@@ -279,6 +323,7 @@ private:
         }
 
         // 更新温湿度数据（在待机模式下）
+        // 只有在空闲状态时才上传，避免影响小智唤醒和语音交互
         if (display_) {
             if (sht30_sensor_ && sht30_sensor_->IsInitialized()) {
                 float temp, humi;
@@ -286,17 +331,23 @@ private:
                     ESP_LOGI(TAG, "SHT30 read successful: temp=%.1f°C, humi=%.1f%%", temp, humi);
                     display_->UpdateStandbyTemperatureHumidity(temp, humi);
 
-                    // 上传温湿度数据到云服务器（每60秒上传一次）
-                    upload_counter_++;
-                    if (upload_counter_ >= 60) { // 60秒
-                        ESP_LOGI(TAG, "Upload counter reached %d, attempting upload", upload_counter_);
-                        if (sensor_uploader_) {
-                            ESP_LOGI(TAG, "Calling UploadSensorData: temp=%.1f, humi=%.1f", temp, humi);
-                            sensor_uploader_->UploadSensorData(temp, humi, nullptr);
-                        } else {
-                            ESP_LOGW(TAG, "Sensor uploader not available (sensor_uploader_=%p)", (void*)sensor_uploader_);
+                    // 上传温湿度数据到云服务器（仅在待机状态下上传）
+                    // 待机状态下没有其他任务，可以加快上传频率，提高数据实时性
+                    // 这样可以避免在上传时阻塞小智唤醒和语音交互
+                    if (current_state == kDeviceStateIdle) {
+                        upload_counter_++;
+                        if (upload_counter_ >= 10) { // 10秒上传一次（待机状态）
+                            ESP_LOGI(TAG, "Upload counter reached %d, attempting upload", upload_counter_);
+                            if (sensor_uploader_) {
+                                ESP_LOGI(TAG, "Calling UploadSensorData: temp=%.1f, humi=%.1f", temp, humi);
+                                sensor_uploader_->UploadSensorData(temp, humi, 0, nullptr); // status=0: 待机
+                            } else {
+                                ESP_LOGW(TAG, "Sensor uploader not available (sensor_uploader_=%p)", (void*)sensor_uploader_);
+                            }
+                            upload_counter_ = 0;
                         }
-                        upload_counter_ = 0;
+                    } else {
+                        ESP_LOGD(TAG, "Device not idle (state=%d), skipping sensor upload", current_state);
                     }
                 } else {
                     ESP_LOGW(TAG, "Failed to read SHT30 data");
@@ -348,6 +399,16 @@ public:
         if (display_) {
             ESP_LOGI(TAG, "Initial setup - showing standby screen");
             display_->ShowStandbyScreen();
+        }
+
+        // 启动后立即上传一次温湿度数据，避免网页长时间显示"等待数据"
+        if (sht30_sensor_ && sht30_sensor_->IsInitialized() && sensor_uploader_) {
+            float temp, humi;
+            if (sht30_sensor_->ReadData(&temp, &humi)) {
+                ESP_LOGI(TAG, "Initial upload: temp=%.1f°C, humi=%.1f%%", temp, humi);
+                display_->UpdateStandbyTemperatureHumidity(temp, humi);
+                sensor_uploader_->UploadSensorData(temp, humi, 0, nullptr); // status=0: 待机
+            }
         }
     }
 

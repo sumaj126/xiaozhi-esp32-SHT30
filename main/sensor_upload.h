@@ -26,7 +26,8 @@ public:
     void Stop();
 
     // 手动上传一次温湿度数据
-    bool UploadSensorData(float temperature, float humidity, UploadCallback callback = nullptr);
+    // status: 设备状态（0=待机, 1=唤醒中, 2=录音中, 3=播放中, 4=配置中）
+    bool UploadSensorData(float temperature, float humidity, int status = 0, UploadCallback callback = nullptr);
 
     // 设置上传回调
     void SetUploadCallback(UploadCallback callback);
@@ -52,7 +53,7 @@ private:
     bool PostData(const std::string& json_data, UploadCallback callback);
 
     // 构建JSON数据
-    std::string BuildJson(float temperature, float humidity);
+    std::string BuildJson(float temperature, float humidity, int status = 0);
 };
 
 #endif // SENSOR_UPLOAD_H

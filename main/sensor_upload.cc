@@ -44,7 +44,7 @@ void SensorDataUploader::SetUploadCallback(UploadCallback callback) {
     callback_ = callback;
 }
 
-bool SensorDataUploader::UploadSensorData(float temperature, float humidity, UploadCallback callback) {
+bool SensorDataUploader::UploadSensorData(float temperature, float humidity, int status, UploadCallback callback) {
     // 检查数据是否有效
     if (std::isnan(temperature) || std::isnan(humidity)) {
         ESP_LOGW(TAG, "Invalid sensor data: temp=%f, humi=%f", temperature, humidity);
@@ -54,7 +54,9 @@ bool SensorDataUploader::UploadSensorData(float temperature, float humidity, Upl
         return false;
     }
 
-    // 去重：如果数据和上次一样，跳过上传
+    // 注释掉去重逻辑，确保定时上传
+    // 温湿度稳定时也需要上传数据，避免网页显示离线
+    /*
     if (has_last_data_ &&
         std::abs(temperature - last_temperature_) < 0.1f &&
         std::abs(humidity - last_humidity_) < 1.0f) {
@@ -64,24 +66,23 @@ bool SensorDataUploader::UploadSensorData(float temperature, float humidity, Upl
         }
         return true;
     }
+    */
 
     // 构建JSON数据
-    std::string json_data = BuildJson(temperature, humidity);
+    std::string json_data = BuildJson(temperature, humidity, status);
 
     // 上传数据
     bool success = PostData(json_data, callback);
 
-    // 只有上传成功时才保存数据
-    if (success) {
-        last_temperature_ = temperature;
-        last_humidity_ = humidity;
-        has_last_data_ = true;
-    }
+    // 保存数据
+    last_temperature_ = temperature;
+    last_humidity_ = humidity;
+    has_last_data_ = true;
 
     return success;
 }
 
-std::string SensorDataUploader::BuildJson(float temperature, float humidity) {
+std::string SensorDataUploader::BuildJson(float temperature, float humidity, int status) {
     cJSON* root = cJSON_CreateObject();
     if (root == nullptr) {
         ESP_LOGE(TAG, "Failed to create JSON object");
@@ -99,6 +100,9 @@ std::string SensorDataUploader::BuildJson(float temperature, float humidity) {
 
     // 添加时间戳
     cJSON_AddNumberToObject(root, "timestamp", esp_timer_get_time() / 1000);
+
+    // 添加设备状态（0=待机, 1=唤醒中, 2=录音中, 3=播放中, 4=配置中）
+    cJSON_AddNumberToObject(root, "device_status", status);
 
     // 转换为字符串
     char* json_str = cJSON_PrintUnformatted(root);
