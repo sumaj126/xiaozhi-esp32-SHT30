@@ -78,6 +78,10 @@ void Protocol::SendMcpMessage(const std::string& payload) {
     SendText(message);
 }
 
+bool Protocol::SendTextMessage(const std::string& text) {
+    return SendText(text);
+}
+
 bool Protocol::IsTimeout() const {
     const int kTimeoutSeconds = 120;
     auto now = std::chrono::steady_clock::now();

@@ -86,6 +86,53 @@ void Application::Initialize() {
     };
     audio_service_.SetCallbacks(callbacks);
 
+    // Initialize reminder manager
+    reminder_manager_.Initialize();
+    reminder_manager_.SetReminderCallback([this](const Reminder& reminder) {
+        // Handle reminder triggered
+        ESP_LOGI(TAG, "Reminder triggered: %s", reminder.ToString().c_str());
+        
+        // Play notification sound
+        audio_service_.PlaySound(Lang::Sounds::OGG_EXCLAMATION);
+        
+        // Show alert
+        Alert("Reminder", reminder.message.c_str(), "bell", "");
+        
+        // Send text to server for TTS
+        if (protocol_ && protocol_->IsAudioChannelOpened()) {
+            // Create TTS message
+            cJSON* root = cJSON_CreateObject();
+            cJSON_AddStringToObject(root, "type", "tts");
+            cJSON_AddStringToObject(root, "text", reminder.message.c_str());
+            char* json_str = cJSON_PrintUnformatted(root);
+            std::string message(json_str);
+            cJSON_free(json_str);
+            cJSON_Delete(root);
+            
+            protocol_->SendTextMessage(message);
+        } else {
+            // If audio channel is not open, try to open it and send TTS
+            if (protocol_) {
+                SetDeviceState(kDeviceStateConnecting);
+                Schedule([this, message = reminder.message]() {
+                    if (protocol_->OpenAudioChannel()) {
+                        // Create TTS message
+                        cJSON* root = cJSON_CreateObject();
+                        cJSON_AddStringToObject(root, "type", "tts");
+                        cJSON_AddStringToObject(root, "text", message.c_str());
+                        char* json_str = cJSON_PrintUnformatted(root);
+                        std::string tts_message(json_str);
+                        cJSON_free(json_str);
+                        cJSON_Delete(root);
+                        
+                        protocol_->SendTextMessage(tts_message);
+                    }
+                });
+            }
+        }
+    });
+    reminder_manager_.Start();
+
     // Add state change listeners
     state_machine_.AddStateChangeListener([this](DeviceState old_state, DeviceState new_state) {
         xEventGroupSetBits(event_group_, MAIN_EVENT_STATE_CHANGED);
